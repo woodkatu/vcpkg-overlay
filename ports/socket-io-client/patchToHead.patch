@@ -1,0 +1,1740 @@
+From 59f3a2a86927c76b1fdd4f473727fc2674cba51e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Ha=CC=8Avard=20Fossli?= <hfossli@gmail.com>
+Date: Tue, 29 Sep 2015 21:58:35 +0200
+Subject: [PATCH] Restructuring readme
+
+---
+ API.md                           | 196 ++++++++++++++++++
+ BOOST.md                         |  21 ++
+ INSTALL.md                       |  48 +++++
+ INSTALL_IOS.md                   |  33 +++
+ README.md                        | 335 +++++-------------------------
+ examples/Console/main.cpp        |   6 +-
+ src/internal/.DS_Store           | Bin 0 -> 6148 bytes
+ src/internal/sio_client_impl.cpp |  73 ++++---
+ src/internal/sio_client_impl.h   |   7 +-
+ src/internal/sio_packet.cpp      |   6 +-
+ src/sio_client.cpp               |  11 +-
+ src/sio_client.h                 |   7 +-
+ src/sio_message.h                | 345 +++++++++++++++++++++++--------
+ src/sio_socket.cpp               |   6 +-
+ src/sio_socket.h                 |   4 +-
+ 15 files changed, 679 insertions(+), 419 deletions(-)
+ create mode 100644 API.md
+ create mode 100644 BOOST.md
+ create mode 100644 INSTALL.md
+ create mode 100644 INSTALL_IOS.md
+ create mode 100644 src/internal/.DS_Store
+ mode change 100755 => 100644 src/sio_client.cpp
+ mode change 100755 => 100644 src/sio_client.h
+
+diff --git a/API.md b/API.md
+new file mode 100644
+index 0000000..1061fc7
+--- /dev/null
++++ b/API.md
+@@ -0,0 +1,196 @@
++## API
++### *Overview*
++There're just 3 roles in this library - `socket`, `client` and `message`.
++
++`client` is for physical connection while `socket` is for "namespace" (which is like a logical channel), which means one `socket` paired with one namespace, and one `client` paired with one physical connection.
++
++Since a physical connection can have multiple namespaces (which is called multiplex), a `client` object may have multiple `socket` objects, each of which is bound to a distinct `namespace`.
++
++Use `client` to setup the connection to the server, manange the connection status, also session id for the connection.
++
++Use `socket` to send messages under namespace and receives messages in the namespace, also handle special types of message.
++
++The `message` is just about the content you want to send, with text, binary or structured combinations.
++
++### *Socket*
++#### Constructors
++Sockets are all managed by `client`, no public constructors.
++
++You can get it's pointer by `client.socket(namespace)`.
++
++#### Event Emitter
++`void emit(std::string const& name, message::list const& msglist, std::function<void (message::ptr const&)> const& ack)`
++
++Universal event emition interface, by applying implicit conversion magic, it is backward compatible with all previous `emit` interfaces.
++
++#### Event Bindings
++`void on(std::string const& event_name,event_listener const& func)`
++
++`void on(std::string const& event_name,event_listener_aux const& func)`
++
++Bind a callback to specified event name. Same as `socket.on()` function in JS, `event_listener` is for full content event object, `event_listener_aux` is for convenience.
++
++`void off(std::string const& event_name)`
++
++Unbind the event callback with specified name.
++
++`void off_all()`
++
++Clear all event bindings (not including the error listener).
++
++`void on_error(error_listener const& l)`
++
++Bind the error handler for socket.io error messages.
++
++`void off_error()`
++
++Unbind the error handler.
++
++```C++
++//event object:
++class event
++{
++public:
++    const std::string& get_nsp() const;
++
++    const std::string& get_name() const;
++
++    const message::ptr& get_message() const;
++
++    bool need_ack() const;
++
++    void put_ack_message(message::ptr const& ack_message);
++
++    message::ptr const& get_ack_message() const;
++   ...
++};
++//event listener declare:
++typedef std::function<void(const std::string& name,message::ptr const& message,bool need_ack, message::ptr& ack_message)> event_listener_aux;
++
++typedef std::function<void(event& event)> event_listener;
++
++typedef std::function<void(message::ptr const& message)> error_listener;
++
++```
++
++#### Connect and close socket
++`connect` will happen for existing `socket`s automatically when `client` have opened up the physical connection.
++
++`socket` opened with connected `client` will connect to its namespace immediately.
++
++`void close()`
++
++Positively disconnect from namespace.
++
++#### Get name of namespace
++`std::string const& get_namespace() const`
++
++Get current namespace name which the client is inside.
++
++### *Client*
++#### Constructors
++`client()` default constructor.
++
++#### Connection Listeners
++`void set_open_listener(con_listener const& l)`
++
++Call when websocket is open, especially means good connectivity.
++
++`void set_fail_listener(con_listener const& l)`
++
++Call when failed in connecting.
++
++`void set_close_listener(close_listener const& l)`
++
++Call when closed or drop. See `client::close_reason`
++
++```C++
++//connection listener declare:
++enum close_reason
++{
++    close_reason_normal,
++    close_reason_drop
++};
++typedef std::function<void(void)> con_listener;
++
++typedef std::function<void(close_reason const& reason)> close_listener;
++```
++#### Socket listeners
++`void set_socket_open_listener(socket_listener const& l)`
++
++Set listener for socket connect event, called when any sockets being ready to send message.
++
++`void set_socket_close_listener(socket_listener const& l)`
++
++Set listener for socket close event, called when any sockets being closed, afterward, corresponding `socket` object will be cleared from client.
++
++```C++
++    //socket_listener declare:
++    typedef std::function<void(std::string const& nsp)> socket_listener;
++```
++
++#### Connect and Close
++`void connect(const std::string& uri)`
++
++Connect to socket.io server, e.g., `client.connect("ws://localhost:3000");`
++
++`void close()`
++
++Close the client, return immediately.
++
++`void sync_close()`
++
++Close the client, return until it is really closed.
++
++`bool opened() const`
++
++Check if client's connection is opened.
++
++#### Transparent reconnecting
++`void set_reconnect_attempts(int attempts)`
++
++Set max reconnect attempts, set to 0 to disable transparent reconnecting.
++
++`void set_reconnect_delay(unsigned millis)`
++
++Set minimum delay for reconnecting, this is the delay for 1st reconnecting attempt,
++then the delay duration grows by attempts made.
++
++`void set_reconnect_delay_max(unsigned millis)`
++
++Set maximum delay for reconnecting.
++
++`void set_reconnecting_listener(con_listener const& l)`
++
++Set listener for reconnecting is in process.
++
++`void set_reconnect_listener(reconnect_listener const& l)`
++
++Set listener for reconnecting event, called once a delayed connecting is scheduled.
++
++#### Namespace
++`socket::ptr socket(std::string const& nsp)`
++
++Get a pointer to a socket which is paired with the specified namespace.
++
++#### Session ID
++`std::string const& get_sessionid() const`
++
++Get socket.io session id.
++
++### *Message*
++`message` Base class of all message object.
++
++`int_message` message contains a 64-bit integer.
++
++`double_message` message contains a double.
++
++`string_message` message contains a string.
++
++`array_message` message contains a `vector<message::ptr>`.
++
++`object_message` message contains a `map<string,message::ptr>`.
++
++`message::ptr` pointer to `message` object, it will be one of its derived classes, judge by `message.get_flag()`.
++
++All designated constructor of `message` objects is hidden, you need to create message and get the `message::ptr` by `[derived]_message:create()`.
+diff --git a/BOOST.md b/BOOST.md
+new file mode 100644
+index 0000000..d9c4646
+--- /dev/null
++++ b/BOOST.md
+@@ -0,0 +1,21 @@
++## Boost setup
++
++1. Download boost from [boost.org](http://www.boost.org/).
++1. Unpack boost to some place.
++1. Run either .\bootstrap.bat (on Windows), or ./bootstrap.sh (on other operating systems) under boost folder.
++
++## Boost build (Build the necessary subset only)
++
++#### Windows (or other mainstream desktop platforms shall work too):
++Run with following script will build the necessary subset:
++
++```bash
++bjam install --prefix="<your boost install folder>" --with-system --with-date_time --with-random link=static runtime-link=shared threading=multi
++```
++Optionally You can merge all output .lib files into a fat one,especially if you're not using cmake.
++
++In output folder, run:
++
++```bash
++lib.exe /OUT:boost.lib *
++```
+diff --git a/INSTALL.md b/INSTALL.md
+new file mode 100644
+index 0000000..614280d
+--- /dev/null
++++ b/INSTALL.md
+@@ -0,0 +1,48 @@
++## Install
++
++### With CMake
++1. Install boost, see [Boost setup](#boost_setup) section.
++2. Use `git clone --recurse-submodules https://github.com/socketio/socket.io-client-cpp.git` to clone your local repo.
++3. Run `cmake -DBOOST_ROOT:STRING=<your boost install folder> -DBOOST_VER:STRING=<your boost version> ./`
++4. Run `make install`(if makefile generated) or open generated project (if project file generated) to build.
++5. Outputs is under `./build`, link with the all static libs under `./build/lib` and  include headers under `./build/include` in your client code where you want to use it.
++
++* If you're using boost without install,you can specify `boost include dir` and `boost lib dir` separately by:
++```bash
++cmake
++-DBOOST_INCLUDEDIR=<your boost include folder>
++-DBOOST_LIBRARYDIR=<your boost lib folder>
++-DBOOST_VER:STRING=<your boost version>
++./
++```
++* CMake didn't allow merging static libraries,but they're all copied to `./build/lib`, you can DIY if you like.
++
++### Without CMake
++1. Install boost, see [Boost setup](#boost_setup) section.
++2. Use `git clone --recurse-submodules https://github.com/socketio/socket.io-client-cpp.git` to clone your local repo.
++3. Add `<your boost install folder>/include`,`./lib/websocketpp` and `./lib/rapidjson/include` to headers search path.
++4. Include all files under `./src` in your project, add `sio_client.cpp`,`sio_socket.cpp`,`internal/sio_client_impl.cpp`, `internal/sio_packet.cpp` to source list.
++5. Add `<your boost install folder>/lib` to library search path, add `boost.lib`(Win32) or `-lboost`(Other) link option.
++6. Include `sio_client.h` in your client code where you want to use it.
++
++## Boost setup
++
++1. Download boost from [boost.org](http://www.boost.org/).
++1. Unpack boost to some place.
++1. Run either .\bootstrap.bat (on Windows), or ./bootstrap.sh (on other operating systems) under boost folder.
++
++## Boost build (Build the necessary subset only)
++Windows (or other mainstream desktop platforms shall work too):
++
++The following script will build the necessary subset:
++
++```bash
++bjam install --prefix="<your boost install folder>" --with-system --with-date_time --with-random link=static runtime-link=shared threading=multi
++```
++Optionally You can merge all output .lib files into a fat one, especially if you're not using cmake.
++
++In output folder, run:
++
++```bash
++lib.exe /OUT:boost.lib *
++```
+diff --git a/INSTALL_IOS.md b/INSTALL_IOS.md
+new file mode 100644
+index 0000000..881b208
+--- /dev/null
++++ b/INSTALL_IOS.md
+@@ -0,0 +1,33 @@
++## iOS
++
++### Option 1: Cocoapods
++
++```
++pod 'SocketIO-Client-CPP'
++```
++
++### Option 2: Create a static library
++
++1. Create a static library
++1. Copy the header files into xcode
++
++Use the static libraries generated by the example project [iOS example project](examples/iOS)
++
++Create one for
++- release iphoneos
++- release simulator
++- debug iphoneos
++- debug simulator
++
++Join the debug libraries and the release libraries with e.g.
++```
++libtool -static -o libUniversalRelease.a Release-iphoneos/libsioclient.a Release-iphonesimulator/libsioclient.a
++libtool -static -o libUniversalDebug.a Debug-iphoneos/libsioclient.a Debug-iphonesimulator/libsioclient.a
++```
++
++
++### Option 3: Manual integration
++
++Use this [shell](https://gist.github.com/melode11/a90114a2abf009ca22ea) to download and build boost completely automattically. It installs boost to `<shell folder>/prefix`.
++
++See the [iOS example project](examples/iOS) for how to integrate the rest.
+diff --git a/README.md b/README.md
+index 9fc2e83..b30c7d8 100755
+--- a/README.md
++++ b/README.md
+@@ -1,93 +1,89 @@
+ # Socket.IO C++ Client
+ [![Build Status](https://travis-ci.org/socketio/socket.io-client-cpp.svg)](https://travis-ci.org/socketio/socket.io-client-cpp)
+ 
+-This repository contains the Socket.IO C++ client. It depends on [websocket++](https://github.com/zaphoyd/websocketpp) and is inspired by [socket.io-clientpp](https://github.com/ebshimizu/socket.io-clientpp).
+-
+-By virtue of being written in C++, this client works in several different platforms. The [examples](https://github.com/socketio/socket.io-client-cpp/tree/master/examples) folder contains an iPhone, QT and Console example chat client!
++By virtue of being written in C++, this client works in several different platforms. The [examples](https://github.com/socketio/socket.io-client-cpp/tree/master/examples) folder contains an iPhone, QT and Console example chat client! It depends on [websocket++](https://github.com/zaphoyd/websocketpp) and is inspired by [socket.io-clientpp](https://github.com/ebshimizu/socket.io-clientpp).
+ 
+ [![Clients with iPhone, QT, Console and web](https://cldup.com/ukvVVZmvYV.png)](https://github.com/socketio/socket.io-client-cpp/tree/master/examples)
+ 
+ ## Features
+ 
+ - 100% written in modern C++11
+-- Compatible with 1.0+ protocol
++- Compatible with socket.io 1.0+ protocol
+ - Binary support
+ - Automatic JSON encoding
+ - Multiplex support
+ - Similar API to the Socket.IO JS client
++- Cross platform
+ 
+-## How to use
+-###<a name="with_cmake"></a> With CMake
+-1. Install boost, see [Boost setup](#boost_setup) section.
+-2. Use `git clone --recurse-submodules https://github.com/socketio/socket.io-client-cpp.git` to clone your local repo.
+-3. Run `cmake -DBOOST_ROOT:STRING=<your boost install folder> -DBOOST_VER:STRING=<your boost version> ./`
+-4. Run `make install`(if makefile generated) or open generated project (if project file generated) to build.
+-5. Outputs is under `./build`, link with the all static libs under `./build/lib` and  include headers under `./build/include` in your client code where you want to use it.
++## Installation alternatives
+ 
+-* If you're using boost without install,you can specify `boost include dir` and `boost lib dir` separately by:
+-```bash
+-cmake
+--DBOOST_INCLUDEDIR=<your boost include folder> 
+--DBOOST_LIBRARYDIR=<your boost lib folder>
+--DBOOST_VER:STRING=<your boost version>
+-./
+-```
+-* CMake didn't allow merging static libraries,but they're all copied to `./build/lib`, you can DIY if you like.
++* [With CMAKE](./INSTALL.md#with-cmake)
++* [Without CMAKE](./INSTALL.md#without-cmake)
++* [iOS and OS X](./INSTALL_IOS.md)
++ * Option 1: Cocoapods
++ * Option 2: Create a static library
++ * Option 3: Manual integration
++
++
++## Quickstart
+ 
+-### Without CMake
+-1. Install boost, see [Boost setup](#boost_setup) section.
+-2. Use `git clone --recurse-submodules https://github.com/socketio/socket.io-client-cpp.git` to clone your local repo.
+-3. Add `<your boost install folder>/include`,`./lib/websocketpp` and `./lib/rapidjson/include` to headers search path.
+-4. Include all files under `./src` in your project, add `sio_client.cpp`,`sio_socket.cpp`,`internal/sio_client_impl.cpp`, `internal/sio_packet.cpp` to source list.
+-5. Add `<your boost install folder>/lib` to library search path, add `boost.lib`(Win32) or `-lboost`(Other) link option.
+-6. Include `sio_client.h` in your client code where you want to use it.
++** [Full overview of API can be seen here](./API.md) **
+ 
+-## Quick start
+-The APIs are similar with JS client.
+ 
+-Connect to a server
++The APIs are similar to the JS client.
++
++#### Connect to a server
+ ```C++
+ sio::client h;
+ h.connect("http://127.0.0.1:3000");
+ ```
+ 
+-Emit a event
++#### Emit an event
++
+ ```C++
+-//emit event name only:
+-h.socket->emit("login");
+-//emit text
++// emit event name only:
++h.socket()->emit("login");
++
++// emit text
+ h.socket()->emit("add user", username);
+-//emit binary
++
++// emit binary
+ char buf[100];
+ h.socket()->emit("add user", std::make_shared<std::string>(buf,100));
+-//emit message object with lambda ack handler
+-h.socket()->emit("add user", string_message::create(username), [&](message::list const& msg)
+-{
++
++// emit message object with lambda ack handler
++h.socket()->emit("add user", string_message::create(username), [&](message::list const& msg) {
+ });
+-//emit with `message::list`
+-message::list li("arg1");
+-li.push(string_message::create("arg2"));
+-socket->emit("new va",li);// support io.on("new va",function(arg1,arg2){}); style in server side.
++
++// emit multiple arguments
++message::list li("sports");
++li.push(string_message::create("economics"));
++socket->emit("categories", li);
+ ```
+-* Items in `message::list` will be expanded in server side event callback function as function arguments.
++Items in `message::list` will be expanded in server side event callback function as function arguments.
++
++#### Bind an event
+ 
+-Bind a event
++##### Bind with function pointer
+ ```C++
+-/**************** bind with function pointer ***************/
+ void OnMessage(sio::event &)
+ {
+-    
++
+ }
+ h.socket()->on("new message", &OnMessage);
++```
+ 
+-/********************* bind with lambda ********************/
++##### Bind with lambda
++```C++
+ h.socket()->on("login", [&](sio::event& ev)
+ {
+     //handle login message
+     //post to UI thread if any UI updating.
+ });
++```
+ 
+-/**************** bind with member function *****************/
++##### Bind with member function
++```C++
+ class MessageHandler
+ {
+ public:
+@@ -96,248 +92,13 @@ public:
+ MessageHandler mh;
+ h.socket()->on("new message",std::bind( &MessageHandler::OnMessage,&mh,std::placeholders::_1));
+ ```
+-Send to other namespace
+-```C++
+-h.socket("/chat")->emit("add user", username);
+-```
+-
+-## API
+-### *Overview*
+-There're just 3 roles in this library - `socket`,`client` and `message`.
+-
+-`client` is for physical connection while `socket` is for "namespace"(which is like a logical channel), which means one `socket` paired with one namespace, and one `client` paired with one physical connection.
+-
+-Since a physical connection can have multiple namespaces (which is called multiplex), a `client` object may have multiple `socket` objects, each is bind to a distinct `namespace`.
+-
+-Use `client` to setup the connection to the server, manange the connection status, also session id for the connection.
+-
+-Use `socket` to send messages under namespace and receives messages in the namespace, also handle special types of message. 
+-
+-The `message` is just about the content you want to send, with text,binary or structured combinations.
+-
+-### *Socket*
+-#### Constructors
+-Sockets are all managed by `client`, no public constructors.
+-
+-You can get it's pointer by `client.socket(namespace)`.
+-
+-#### Event Emitter
+-`void emit(std::string const& name, message::list const& msglist, std::function<void (message::ptr const&)> const& ack)`
+-
+-Universal event emition interface, by applying implicit conversion magic, it is backward compatible with all previous `emit` interfaces.
+-
+-#### Event Bindings
+-`void on(std::string const& event_name,event_listener const& func)`
+-
+-`void on(std::string const& event_name,event_listener_aux const& func)`
+-
+-Bind a callback to specified event name. Same as `socket.on()` function in JS, `event_listener` is for full content event object,`event_listener_aux` is for convinience.
+-
+-`void off(std::string const& event_name)`
+-
+-Unbind the event callback with specified name.
+-
+-`void off_all()` 
+-
+-Clear all event bindings (not including the error listener).
+-
+-`void on_error(error_listener const& l)`
+-
+-Bind the error handler for socket.io error messages.
+-
+-`void off_error()`
+-
+-Unbind the error handler.
+-
+-```C++
+-//event object:
+-class event
+-{
+-public:
+-    const std::string& get_nsp() const;
+-    
+-    const std::string& get_name() const;
+-    
+-    const message::ptr& get_message() const;
+-    
+-    bool need_ack() const;
+-    
+-    void put_ack_message(message::ptr const& ack_message);
+-    
+-    message::ptr const& get_ack_message() const;
+-   ...
+-};
+-//event listener declare:
+-typedef std::function<void(const std::string& name,message::ptr const& message,bool need_ack, message::ptr& ack_message)> event_listener_aux;
+-        
+-typedef std::function<void(event& event)> event_listener;
+-
+-typedef std::function<void(message::ptr const& message)> error_listener;
+-
+-```
+-
+-#### Connect and close socket
+-`connect` will happen for existing `socket`s automatically when `client` have opened up the physical connection.
+-
+-`socket` opened with connected `client` will connect to its namespace immediately.
+-
+-`void close()`
+-
+-Positively disconnect from namespace.
+-
+-#### Get name of namespace
+-`std::string const& get_namespace() const`
+-
+-Get current namespace name which the client is inside.
+-
+-### *Client*
+-#### Constructors
+-`client()` default constructor.
+-
+-#### Connection Listeners
+-`void set_open_listener(con_listener const& l)`
+-
+-Call when websocket is open, especially means good connectivity.
+-
+-`void set_fail_listener(con_listener const& l)`
+-
+-Call when failed in connecting.
+-
+-`void set_close_listener(close_listener const& l)`
+-
+-Call when closed or drop. See `client::close_reason`
+-
+-```C++
+-//connection listener declare:
+-enum close_reason
+-{
+-    close_reason_normal,
+-    close_reason_drop
+-};
+-typedef std::function<void(void)> con_listener;
+-        
+-typedef std::function<void(close_reason const& reason)> close_listener;
+-```
+-#### Socket listeners
+-`void set_socket_open_listener(socket_listener const& l)`
+-
+-Set listener for socket connect event, called when any sockets being ready to send message.
+-
+-`void set_socket_close_listener(socket_listener const& l)`
+-
+-Set listener for socket close event, called when any sockets being closed, afterward, corresponding `socket` object will be cleared from client.
+ 
++#### Using namespace
+ ```C++
+-    //socket_listener declare:
+-    typedef std::function<void(std::string const& nsp)> socket_listener;
+-```
+-
+-#### Connect and Close
+-`void connect(const std::string& uri)`
+-
+-Connect to socket.io server, eg. `client.connect("ws://localhost:3000");`
+-
+-`void close()`
+-
+-Close the client, return immediately.
+-
+-`void sync_close()`
+-
+-Close the client, return until it is really closed.
+-
+-`bool opened() const`
+-
+-Check if client's connection is opened.
+-
+-#### Transparent reconnecting
+-`void set_reconnect_attempts(int attempts)`
+-
+-Set max reconnect attempts, set to 0 to disable transparent reconnecting.
+-
+-`void set_reconnect_delay(unsigned millis)`
+-
+-Set minimum delay for reconnecting, this is the delay for 1st reconnecting attempt,
+-then the delay duration grows by attempts made.
+-
+-`void set_reconnect_delay_max(unsigned millis)`
+-
+-Set maximum delay for reconnecting.
+-
+-`void set_reconnecting_listener(con_listener const& l)`
+-
+-Set listener for reconnecting is in process.
+-
+-`void set_reconnect_listener(reconnect_listener const& l)`
+-
+-Set listener for reconnecting event, called once a delayed connecting is scheduled.
+-
+-#### Namespace
+-`socket::ptr socket(std::string const& nsp)`
+-
+-Get a pointer to a socket which is paired with the specified namespace.
+-
+-#### Session ID
+-`std::string const& get_sessionid() const`
+-
+-Get socket.io session id.
+-
+-### *Message*
+-`message` Base class of all message object.
+-
+-`int_message` message contains a 64-bit integer.
+-
+-`double_message` message contains a double.
+-
+-`string_message` message contains a string.
+-
+-`array_message` message contains a `vector<message::ptr>`.
+-
+-`object_message` message contains a `map<string,message::ptr>`.
+-
+-`message::ptr` pointer to `message` object, it will be one of its derived classes, judge by `message.get_flag()`.
+-
+-All designated constructor of `message` objects is hidden, you need to create message and get the `message::ptr` by `[derived]_message:create()`.
+-
+-##<a name="boost_setup"></a> Boost setup
+-* Download boost from [boost.org](http://www.boost.org/).
+-
+-* Unpack boost to some place.
+-
+-* Run either .\bootstrap.bat (on Windows), or ./bootstrap.sh (on other operating systems) under boost folder.
+-
+-## Boost build (Build the necessary subset only)
+-
+-#### Windows (or other mainstream desktop platforms shall work too):
+-Run with following script will build the necessary subset:
+-
+-```bash
+-bjam install --prefix="<your boost install folder>" --with-system --with-date_time --with-random link=static runtime-link=shared threading=multi
+-```
+-Optionally You can merge all output .lib files into a fat one,especially if you're not using cmake.
+-
+-In output folder, run:
+-
+-```bash
+-lib.exe /OUT:boost.lib *
+-```
+-
+-### iOS
+-
+-##### Option 1: Cocoapods
+-
+-```
+-pod 'SocketIO-Client-CPP'
++h.socket("/chat")->emit("add user", username);
+ ```
++** [Full overview of API can be seen here](./API.md) **
+ 
+-##### Option 2: Static library
+-
+-Grab the latest library built for all architectures from https://github.com/hfossli/SocketIO-Client-CPP-iOS-Builds
+-
+-##### Option 3: Manually
+-
+-Use this [shell](https://gist.github.com/melode11/a90114a2abf009ca22ea) to download and build boost completely automattically. It installs boost to `<shell folder>/prefix`.
+-
+-See the [iOS example project](examples/iOS) for how to integrate the rest.
++## License
+ 
+-##License
+ MIT
+diff --git a/examples/Console/main.cpp b/examples/Console/main.cpp
+index 846f46f..9a95dfb 100755
+--- a/examples/Console/main.cpp
++++ b/examples/Console/main.cpp
+@@ -69,7 +69,7 @@ int participants = -1;
+ 
+ socket::ptr current_socket;
+ 
+-void bind_events(socket::ptr &socket)
++void bind_events()
+ {
+ 	current_socket->on("new message", sio::socket::event_listener_aux([&](string const& name, message::ptr const& data, bool isAck,message::list &ack_resp)
+                        {
+@@ -141,7 +141,7 @@ Login:
+         _cond.wait(_lock);
+     }
+     _lock.unlock();
+-    bind_events(current_socket);
++    bind_events();
+     
+     HIGHLIGHT("Start to chat,commands:\n'$exit' : exit chat\n'$nsp <namespace>' : change namespace");
+     for (std::string line; std::getline(std::cin, line);) {
+@@ -166,7 +166,7 @@ Login:
+                     current_socket->close();
+                 }
+                 current_socket = h.socket(new_nsp);
+-                bind_events(current_socket);
++                bind_events();
+                 //if change to default nsp, we do not need to login again (since it is not closed).
+                 if(current_socket->get_namespace() == "/")
+                 {
+diff --git a/src/internal/.DS_Store b/src/internal/.DS_Store
+new file mode 100644
+index 0000000000000000000000000000000000000000..67805212cc42671983e02e32f95b8dd02f6868e2
+GIT binary patch
+literal 6148
+zcmeHK!AiqG5PefCv?x;X;xR{01^*zFDD-MRpxRncj3#Kk=QI2$Kfu4yH@ib<lNN8H
+zG6S=3c6Mi`d0R4B05W;KJqJbr22{n~ki!<yb=8ja%(G9FkR!(mC7!XI7M<Ph_>Bzc
+z*$pv9h8#0$bAIJwUX*jL>R;oM`t})w7I1<W-1DSoSfHS_#1kWDv>s8>Gp4^nH7z<>
+z&epOVf1Bm5mEoPW*E1Y787kbc<^zApYI}9LYQ-Mzh;7xBk5(L~F3x~6;0*k62H3Mz
+z1_u#+bOxLOXP{v~-wz2@F*U3shF1rNa0MXt=?+3$KNvM8F-#5Xh+Lsa3?;@;u`7ne
+zaQYM5mm1a)V>rYvA7YioZYUC}Gk+4cL(+&oIs?wYCIfqMI@11svHSkN8RRo(z!~^g
+z3`jrAvk4!`dTZz5wAUuoYpROwt0OicG(s!pUTwvv)FAXHY7kSyIwCz3{}2c?_}~ou
+GC<9+w(OU@s
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/internal/sio_client_impl.cpp b/src/internal/sio_client_impl.cpp
+index 9ce9b83..b052c76 100644
+--- a/src/internal/sio_client_impl.cpp
++++ b/src/internal/sio_client_impl.cpp
+@@ -25,14 +25,14 @@ namespace sio
+ {
+     /*************************public:*************************/
+     client_impl::client_impl() :
+-        m_con_state(con_closed),
+         m_ping_interval(0),
+         m_ping_timeout(0),
+         m_network_thread(),
+-        m_reconn_attempts(0xFFFFFFFF),
+-        m_reconn_made(0),
++        m_con_state(con_closed),
+         m_reconn_delay(5000),
+-        m_reconn_delay_max(25000)
++        m_reconn_delay_max(25000),
++        m_reconn_attempts(0xFFFFFFFF),
++        m_reconn_made(0)
+     {
+         using websocketpp::log::alevel;
+ #ifndef DEBUG
+@@ -63,7 +63,7 @@ namespace sio
+         sync_close();
+     }
+     
+-    void client_impl::connect(const string& uri, const map<string,string>& query)
++    void client_impl::connect(const string& uri, const map<string,string>& query, const map<string, string>& headers)
+     {
+         if(m_reconn_timer)
+         {
+@@ -95,10 +95,13 @@ namespace sio
+             query_str.append("&");
+             query_str.append(it->first);
+             query_str.append("=");
+-            query_str.append(it->second);
++            string query_str_value=encode_query_string(it->second);
++            query_str.append(query_str_value);
+         }
+         m_query_string=move(query_str);
+ 
++        m_http_headers = headers;
++
+         this->reset_states();
+         m_client.get_io_service().dispatch(lib::bind(&client_impl::connect_impl,this,uri,m_query_string));
+         m_network_thread.reset(new thread(lib::bind(&client_impl::run_loop,this)));//uri lifecycle?
+@@ -205,13 +208,18 @@ namespace sio
+ #else
+             ss<<"ws://";
+ #endif
+-            if (m_sid.size()==0) {
+-                ss<<uo.get_host()<<":"<<uo.get_port()<<"/socket.io/?EIO=4&transport=websocket&t="<<time(NULL)<<queryString;
++            const std::string host(uo.get_host());
++            // As per RFC2732, literal IPv6 address should be enclosed in "[" and "]".
++            if(host.find(':')!=std::string::npos){
++                ss<<"["<<uo.get_host()<<"]";
++            } else {
++                ss<<uo.get_host();
+             }
+-            else
+-            {
+-                ss<<uo.get_host()<<":"<<uo.get_port()<<"/socket.io/?EIO=4&transport=websocket&sid="<<m_sid<<"&t="<<time(NULL)<<queryString;
++            ss<<":"<<uo.get_port()<<"/socket.io/?EIO=4&transport=websocket";
++            if(m_sid.size()>0){
++                ss<<"&sid="<<m_sid;
+             }
++            ss<<"&t="<<time(NULL)<<queryString;
+             lib::error_code ec;
+             client_type::connection_ptr con = m_client.get_connection(ss.str(), ec);
+             if (ec) {
+@@ -220,6 +228,10 @@ namespace sio
+                 break;
+             }
+ 
++            for( auto&& header: m_http_headers ) {
++                con->replace_header(header.first, header.second);
++            }
++
+             m_client.connect(con);
+             return;
+         }
+@@ -253,13 +265,6 @@ namespace sio
+     {
+         if(m_con_state == con_opened)
+         {
+-            //delay the ping, since we already have message to send.
+-            boost::system::error_code timeout_ec;
+-            if(m_ping_timer)
+-            {
+-                m_ping_timer->expires_from_now(milliseconds(m_ping_interval),timeout_ec);
+-                m_ping_timer->async_wait(lib::bind(&client_impl::ping,this,lib::placeholders::_1));
+-            }
+             lib::error_code ec;
+             m_client.send(m_con,*payload_ptr,opcode,ec);
+             if(ec)
+@@ -278,8 +283,7 @@ namespace sio
+             return;
+         }
+         packet p(packet::frame_ping);
+-        m_packet_mgr.encode(p,
+-                            [&](bool isBin,shared_ptr<const string> payload)
++        m_packet_mgr.encode(p, [&](bool /*isBin*/,shared_ptr<const string> payload)
+         {
+             lib::error_code ec;
+             this->m_client.send(this->m_con, *payload, frame::opcode::text, ec);
+@@ -359,7 +363,7 @@ namespace sio
+         }
+     }
+ 
+-    void client_impl::on_fail(connection_hdl con)
++    void client_impl::on_fail(connection_hdl)
+     {
+         m_con.reset();
+         m_con_state = con_closed;
+@@ -395,6 +399,7 @@ namespace sio
+     void client_impl::on_close(connection_hdl con)
+     {
+         LOG("Client Disconnected." << endl);
++        con_state m_con_state_was = m_con_state;
+         m_con_state = con_closed;
+         lib::error_code ec;
+         close::status::value code = close::status::normal;
+@@ -410,7 +415,11 @@ namespace sio
+         m_con.reset();
+         this->clear_timers();
+         client::close_reason reason;
+-        if(code == close::status::normal)
++
++        // If we initiated the close, no matter what the close status was,
++        // we'll consider it a normal close. (When using TLS, we can
++        // sometimes get a TLS Short Read error when closing.)
++        if(code == close::status::normal || m_con_state_was == con_closing)
+         {
+             this->sockets_invoke_void(&sio::socket::on_disconnect);
+             reason = client::close_reason_normal;
+@@ -438,7 +447,7 @@ namespace sio
+         }
+     }
+     
+-    void client_impl::on_message(connection_hdl con, client_type::message_ptr msg)
++    void client_impl::on_message(connection_hdl, client_type::message_ptr msg)
+     {
+         if (m_ping_timeout_timer) {
+             boost::system::error_code ec;
+@@ -484,7 +493,8 @@ namespace sio
+             m_ping_timer.reset(new boost::asio::deadline_timer(m_client.get_io_service()));
+             boost::system::error_code ec;
+             m_ping_timer->expires_from_now(milliseconds(m_ping_interval), ec);
+-            if(ec)LOG("ec:"<<ec.message()<<endl);
++            if(ec)
++                LOG("ec:"<<ec.message()<<endl);
+             m_ping_timer->async_wait(lib::bind(&client_impl::ping,this,lib::placeholders::_1));
+             LOG("On handshake,sid:"<<m_sid<<",ping interval:"<<m_ping_interval<<",ping timeout"<<m_ping_timeout<<endl);
+             return;
+@@ -574,4 +584,19 @@ failed:
+         return ctx;
+     }
+ #endif
++
++    std::string client_impl::encode_query_string(const std::string &query){
++        ostringstream ss;
++        ss << std::hex;
++        // Percent-encode (RFC3986) non-alphanumeric characters.
++        for(const char c : query){
++            if((c >= 'a' && c <= 'z') || (c>= 'A' && c<= 'Z') || (c >= '0' && c<= '9')){
++                ss << c;
++            } else {
++                ss << '%' << std::uppercase << std::setw(2) << int((unsigned char) c) << std::nouppercase;
++            }
++        }
++        ss << std::dec;
++        return ss.str();
++    }
+ }
+diff --git a/src/internal/sio_client_impl.h b/src/internal/sio_client_impl.h
+index fb5910c..311a267 100644
+--- a/src/internal/sio_client_impl.h
++++ b/src/internal/sio_client_impl.h
+@@ -97,7 +97,8 @@ namespace sio
+         }
+         
+         // Client Functions - such as send, etc.
+-        void connect(const std::string& uri, const std::map<std::string, std::string>& queryString);
++        void connect(const std::string& uri, const std::map<std::string, std::string>& queryString,
++                     const std::map<std::string, std::string>& httpExtraHeaders);
+         
+         sio::socket::ptr const& socket(const std::string& nsp);
+         
+@@ -175,6 +176,9 @@ namespace sio
+         context_ptr on_tls_init(connection_hdl con);
+         #endif
+         
++        // Percent encode query string
++        std::string encode_query_string(const std::string &query);
++
+         // Connection pointer for client functions.
+         connection_hdl m_con;
+         client_type m_client;
+@@ -182,6 +186,7 @@ namespace sio
+         std::string m_sid;
+         std::string m_base_url;
+         std::string m_query_string;
++        std::map<std::string, std::string> m_http_headers;
+ 
+         unsigned int m_ping_interval;
+         unsigned int m_ping_timeout;
+diff --git a/src/internal/sio_packet.cpp b/src/internal/sio_packet.cpp
+index 2afe08a..a2d13b5 100755
+--- a/src/internal/sio_packet.cpp
++++ b/src/internal/sio_packet.cpp
+@@ -198,8 +198,8 @@ namespace sio
+         _frame(frame_message),
+         _type((isAck?type_ack : type_event) | type_undetermined),
+         _nsp(nsp),
+-        _message(msg),
+         _pack_id(pack_id),
++        _message(msg),
+         _pending_buffers(0)
+     {
+         assert((!isAck
+@@ -210,8 +210,8 @@ namespace sio
+         _frame(frame_message),
+         _type(type),
+         _nsp(nsp),
+-        _message(msg),
+         _pack_id(-1),
++        _message(msg),
+         _pending_buffers(0)
+     {
+ 
+@@ -288,7 +288,7 @@ namespace sio
+             pos++;
+             if (_type == type_binary_event || _type == type_binary_ack) {
+                 size_t score_pos = payload_ptr.find('-');
+-                _pending_buffers = boost::lexical_cast<unsigned>(payload_ptr.substr(pos,score_pos));
++                _pending_buffers = boost::lexical_cast<unsigned>(payload_ptr.substr(pos,score_pos - pos));
+                 pos = score_pos+1;
+             }
+         }
+diff --git a/src/sio_client.cpp b/src/sio_client.cpp
+old mode 100755
+new mode 100644
+index 1c7636a..48d0ce2
+--- a/src/sio_client.cpp
++++ b/src/sio_client.cpp
+@@ -70,13 +70,18 @@ namespace sio
+ 
+     void client::connect(const std::string& uri)
+     {
+-        const std::map<string,string> query;
+-        m_impl->connect(uri, query);
++        m_impl->connect(uri, {}, {});
+     }
+ 
+     void client::connect(const std::string& uri, const std::map<string,string>& query)
+     {
+-        m_impl->connect(uri, query);
++        m_impl->connect(uri, query, {});
++    }
++
++    void client::connect(const std::string& uri, const std::map<std::string,std::string>& query,
++                         const std::map<std::string,std::string>& http_extra_headers)
++    {
++        m_impl->connect(uri, query, http_extra_headers);
+     }
+     
+     socket::ptr const& client::socket(const std::string& nsp)
+diff --git a/src/sio_client.h b/src/sio_client.h
+old mode 100755
+new mode 100644
+index 1cf33ff..77be0a2
+--- a/src/sio_client.h
++++ b/src/sio_client.h
+@@ -58,6 +58,9 @@ namespace sio
+ 
+         void connect(const std::string& uri, const std::map<std::string,std::string>& query);
+ 
++        void connect(const std::string& uri, const std::map<std::string,std::string>& query,
++                     const std::map<std::string,std::string>& http_extra_headers);
++
+         void set_reconnect_attempts(int attempts);
+ 
+         void set_reconnect_delay(unsigned millis);
+@@ -77,8 +80,8 @@ namespace sio
+         
+     private:
+         //disable copy constructor and assign operator.
+-        client(client const& cl){}
+-        void operator=(client const& cl){}
++        client(client const&){}
++        void operator=(client const&){}
+         
+         client_impl* m_impl;
+     };
+diff --git a/src/sio_message.h b/src/sio_message.h
+index 17ba2ad..6ad0d9b 100755
+--- a/src/sio_message.h
++++ b/src/sio_message.h
+@@ -14,8 +14,6 @@
+ #include <type_traits>
+ namespace sio
+ {
+-    using namespace std;
+-    
+     class message
+     {
+     public:
+@@ -27,130 +25,130 @@ namespace sio
+             flag_binary,
+             flag_array,
+             flag_object,
+-			flag_boolean,
+-			flag_null
++            flag_boolean,
++            flag_null
+         };
+ 
+-		virtual ~message(){};
+-        
++        virtual ~message(){};
++
+         class list;
+ 
+         flag get_flag() const
+         {
+             return _flag;
+         }
+-        
+-        typedef shared_ptr<message> ptr;
+ 
+-		virtual bool get_bool() const
+-		{
+-			assert(false);
+-			return false;
+-		}
+-        
++        typedef std::shared_ptr<message> ptr;
++
++        virtual bool get_bool() const
++        {
++            assert(false);
++            return false;
++        }
++
+         virtual int64_t get_int() const
+         {
+             assert(false);
+             return 0;
+         }
+-        
++
+         virtual double get_double() const
+         {
+             assert(false);
+             return 0;
+         }
+-        
+-        virtual string const& get_string() const
++
++        virtual std::string const& get_string() const
+         {
+             assert(false);
+-            static string s_empty_string;
++            static std::string s_empty_string;
+             s_empty_string.clear();
+             return s_empty_string;
+         }
+-        
+-        virtual shared_ptr<const string> const& get_binary() const
++
++        virtual std::shared_ptr<const std::string> const& get_binary() const
+         {
+             assert(false);
+-            static shared_ptr<const string> s_empty_binary;
++            static std::shared_ptr<const std::string> s_empty_binary;
+             s_empty_binary = nullptr;
+             return s_empty_binary;
+         }
+-        
+-        virtual const vector<ptr>& get_vector() const
++
++        virtual const std::vector<ptr>& get_vector() const
+         {
+             assert(false);
+-            static vector<ptr> s_empty_vector;
++            static std::vector<ptr> s_empty_vector;
+             s_empty_vector.clear();
+             return s_empty_vector;
+         }
+ 
+-        virtual vector<ptr>& get_vector()
++        virtual std::vector<ptr>& get_vector()
+         {
+             assert(false);
+-            static vector<ptr> s_empty_vector;
++            static std::vector<ptr> s_empty_vector;
+             s_empty_vector.clear();
+             return s_empty_vector;
+         }
+-        
+-        virtual const map<string,message::ptr>& get_map() const
++
++        virtual const std::map<std::string,message::ptr>& get_map() const
+         {
+             assert(false);
+-            static map<string,message::ptr> s_empty_map;
++            static std::map<std::string,message::ptr> s_empty_map;
+             s_empty_map.clear();
+             return s_empty_map;
+         }
+-        
+-        virtual map<string,message::ptr>& get_map()
++
++        virtual std::map<std::string,message::ptr>& get_map()
+         {
+             assert(false);
+-            static map<string,message::ptr> s_empty_map;
++            static std::map<std::string,message::ptr> s_empty_map;
+             s_empty_map.clear();
+             return s_empty_map;
+         }
+     private:
+         flag _flag;
+-        
++
+     protected:
+         message(flag f):_flag(f){}
+     };
+ 
+-	class null_message : public message
+-	{
+-	protected:
++    class null_message : public message
++    {
++    protected:
+         null_message()
+-			:message(flag_null)
++            :message(flag_null)
+         {
+         }
+ 
+-	public:
++    public:
+         static message::ptr create()
+         {
+             return ptr(new null_message());
+         }
+-	};
++    };
+ 
+-	class bool_message : public message
+-	{
+-		bool _v;
++    class bool_message : public message
++    {
++        bool _v;
+ 
+-	protected:
++    protected:
+         bool_message(bool v)
+             :message(flag_boolean),_v(v)
+         {
+         }
+-        
++
+     public:
+         static message::ptr create(bool v)
+         {
+             return ptr(new bool_message(v));
+         }
+-        
++
+         bool get_bool() const
+         {
+             return _v;
+         }
+-	};
+-    
++    };
++
+     class int_message : public message
+     {
+         int64_t _v;
+@@ -159,24 +157,24 @@ namespace sio
+             :message(flag_integer),_v(v)
+         {
+         }
+-        
++
+     public:
+         static message::ptr create(int64_t v)
+         {
+             return ptr(new int_message(v));
+         }
+-        
++
+         int64_t get_int() const
+         {
+             return _v;
+         }
+-        
++
+         double get_double() const//add double accessor for integer.
+         {
+             return static_cast<double>(_v);
+         }
+     };
+-    
++
+     class double_message : public message
+     {
+         double _v;
+@@ -184,94 +182,164 @@ namespace sio
+             :message(flag_double),_v(v)
+         {
+         }
+-        
++
+     public:
+         static message::ptr create(double v)
+         {
+             return ptr(new double_message(v));
+         }
+-        
++
+         double get_double() const
+         {
+             return _v;
+         }
+     };
+-    
++
+     class string_message : public message
+     {
+-        string _v;
+-        string_message(string const& v)
++        std::string _v;
++        string_message(std::string const& v)
+             :message(flag_string),_v(v)
+         {
+         }
+ 
+-        string_message(string&& v)
++        string_message(std::string&& v)
+             :message(flag_string),_v(move(v))
+         {
+         }
+     public:
+-        static message::ptr create(string const& v)
++        static message::ptr create(std::string const& v)
+         {
+             return ptr(new string_message(v));
+         }
+ 
+-        static message::ptr create(string&& v)
++        static message::ptr create(std::string&& v)
+         {
+             return ptr(new string_message(move(v)));
+         }
+-        
+-        string const& get_string() const
++
++        std::string const& get_string() const
+         {
+             return _v;
+         }
+     };
+-    
++
+     class binary_message : public message
+     {
+-        shared_ptr<const string> _v;
+-        binary_message(shared_ptr<const string> const& v)
++        std::shared_ptr<const std::string> _v;
++        binary_message(std::shared_ptr<const std::string> const& v)
+             :message(flag_binary),_v(v)
+         {
+         }
+     public:
+-        static message::ptr create(shared_ptr<const string> const& v)
++        static message::ptr create(std::shared_ptr<const std::string> const& v)
+         {
+             return ptr(new binary_message(v));
+         }
+-        
+-        shared_ptr<const string> const& get_binary() const
++
++        std::shared_ptr<const std::string> const& get_binary() const
+         {
+             return _v;
+         }
+     };
+-    
++
+     class array_message : public message
+     {
+-        vector<message::ptr> _v;
++        std::vector<message::ptr> _v;
+         array_message():message(flag_array)
+         {
+         }
+-        
++
+     public:
+         static message::ptr create()
+         {
+             return ptr(new array_message());
+         }
+-        
+-        vector<ptr>& get_vector()
++
++        void push(message::ptr const& message)
++        {
++            if(message)
++                _v.push_back(message);
++        }
++
++        void push(const std::string& text)
++        {
++            _v.push_back(string_message::create(text));
++        }
++
++        void push(std::string&& text)
++        {
++            _v.push_back(string_message::create(move(text)));
++        }
++
++        void push(std::shared_ptr<std::string> const& binary)
++        {
++            if(binary)
++                _v.push_back(binary_message::create(binary));
++        }
++
++        void push(std::shared_ptr<const std::string> const& binary)
++        {
++            if(binary)
++                _v.push_back(binary_message::create(binary));
++        }
++
++        void insert(size_t pos,message::ptr const& message)
++        {
++            _v.insert(_v.begin()+pos, message);
++        }
++
++        void insert(size_t pos,const std::string& text)
++        {
++            _v.insert(_v.begin()+pos, string_message::create(text));
++        }
++
++        void insert(size_t pos,std::string&& text)
++        {
++            _v.insert(_v.begin()+pos, string_message::create(move(text)));
++        }
++
++        void insert(size_t pos,std::shared_ptr<std::string> const& binary)
++        {
++            if(binary)
++                _v.insert(_v.begin()+pos, binary_message::create(binary));
++        }
++
++        void insert(size_t pos,std::shared_ptr<const std::string> const& binary)
++        {
++            if(binary)
++                _v.insert(_v.begin()+pos, binary_message::create(binary));
++        }
++
++        size_t size() const
++        {
++            return _v.size();
++        }
++
++        const message::ptr& at(size_t i) const
++        {
++            return _v[i];
++        }
++
++        const message::ptr& operator[] (size_t i) const
++        {
++            return _v[i];
++        }
++
++        std::vector<ptr>& get_vector()
+         {
+             return _v;
+         }
+-        
+-        const vector<ptr>& get_vector() const
++
++        const std::vector<ptr>& get_vector() const
+         {
+             return _v;
+         }
+     };
+-    
++
+     class object_message : public message
+     {
+-        map<string,message::ptr> _v;
++        std::map<std::string,message::ptr> _v;
+         object_message() : message(flag_object)
+         {
+         }
+@@ -280,13 +348,64 @@ namespace sio
+         {
+             return ptr(new object_message());
+         }
+-        
+-        map<string,message::ptr>& get_map()
++
++        void insert(const std::string & key,message::ptr const& message)
++        {
++            _v[key] = message;
++        }
++
++        void insert(const std::string & key,const std::string& text)
++        {
++            _v[key] = string_message::create(text);
++        }
++
++        void insert(const std::string & key,std::string&& text)
++        {
++            _v[key] = string_message::create(move(text));
++        }
++
++        void insert(const std::string & key,std::shared_ptr<std::string> const& binary)
++        {
++            if(binary)
++                _v[key] = binary_message::create(binary);
++        }
++
++        void insert(const std::string & key,std::shared_ptr<const std::string> const& binary)
++        {
++            if(binary)
++                _v[key] = binary_message::create(binary);
++        }
++
++        bool has(const std::string & key)
++        {
++            return _v.find(key) != _v.end();
++        }
++
++        const message::ptr& at(const std::string & key) const
++        {
++            static std::shared_ptr<message> not_found;
++
++            std::map<std::string,message::ptr>::const_iterator it = _v.find(key);
++            if (it != _v.cend()) return it->second;
++            return not_found;
++        }
++
++        const message::ptr& operator[] (const std::string & key) const
++        {
++            return at(key);
++        }
++
++        bool has(const std::string & key) const
++        {
++            return _v.find(key) != _v.end();
++        }
++
++        std::map<std::string,message::ptr>& get_map()
+         {
+             return _v;
+         }
+-        
+-        const map<string,message::ptr>& get_map() const
++
++        const std::map<std::string,message::ptr>& get_map() const
+         {
+             return _v;
+         }
+@@ -299,7 +418,7 @@ namespace sio
+         {
+         }
+ 
+-        list(nullptr_t)
++        list(std::nullptr_t)
+         {
+         }
+ 
+@@ -315,10 +434,10 @@ namespace sio
+             return *this;
+         }
+ 
+-		template <typename T>
+-		list(T&& content,
+-			typename enable_if<is_same<vector<message::ptr>,typename remove_reference<T>::type>::value>::type* = 0):
+-			m_vector(std::forward<T>(content))
++        template <typename T>
++        list(T&& content,
++            typename std::enable_if<std::is_same<std::vector<message::ptr>,typename std::remove_reference<T>::type>::value>::type* = 0):
++            m_vector(std::forward<T>(content))
+         {
+         }
+ 
+@@ -332,25 +451,26 @@ namespace sio
+         {
+             if(message)
+                 m_vector.push_back(message);
++
+         }
+ 
+-        list(const string& text)
++        list(const std::string& text)
+         {
+             m_vector.push_back(string_message::create(text));
+         }
+ 
+-        list(string&& text)
++        list(std::string&& text)
+         {
+             m_vector.push_back(string_message::create(move(text)));
+         }
+ 
+-        list(shared_ptr<string> const& binary)
++        list(std::shared_ptr<std::string> const& binary)
+         {
+             if(binary)
+                 m_vector.push_back(binary_message::create(binary));
+         }
+ 
+-        list(shared_ptr<const string> const& binary)
++        list(std::shared_ptr<const std::string> const& binary)
+         {
+             if(binary)
+                 m_vector.push_back(binary_message::create(binary));
+@@ -360,7 +480,28 @@ namespace sio
+         {
+             if(message)
+                 m_vector.push_back(message);
++        }
+ 
++        void push(const std::string& text)
++        {
++            m_vector.push_back(string_message::create(text));
++        }
++
++        void push(std::string&& text)
++        {
++            m_vector.push_back(string_message::create(move(text)));
++        }
++
++        void push(std::shared_ptr<std::string> const& binary)
++        {
++            if(binary)
++                m_vector.push_back(binary_message::create(binary));
++        }
++
++        void push(std::shared_ptr<const std::string> const& binary)
++        {
++            if(binary)
++                m_vector.push_back(binary_message::create(binary));
+         }
+ 
+         void insert(size_t pos,message::ptr const& message)
+@@ -368,6 +509,28 @@ namespace sio
+             m_vector.insert(m_vector.begin()+pos, message);
+         }
+ 
++        void insert(size_t pos,const std::string& text)
++        {
++            m_vector.insert(m_vector.begin()+pos, string_message::create(text));
++        }
++
++        void insert(size_t pos,std::string&& text)
++        {
++            m_vector.insert(m_vector.begin()+pos, string_message::create(move(text)));
++        }
++
++        void insert(size_t pos,std::shared_ptr<std::string> const& binary)
++        {
++            if(binary)
++                m_vector.insert(m_vector.begin()+pos, binary_message::create(binary));
++        }
++
++        void insert(size_t pos,std::shared_ptr<const std::string> const& binary)
++        {
++            if(binary)
++                m_vector.insert(m_vector.begin()+pos, binary_message::create(binary));
++        }
++
+         size_t size() const
+         {
+             return m_vector.size();
+@@ -383,7 +546,7 @@ namespace sio
+             return m_vector[i];
+         }
+ 
+-        message::ptr to_array_message(string const& event_name) const
++        message::ptr to_array_message(std::string const& event_name) const
+         {
+             message::ptr arr = array_message::create();
+             arr->get_vector().push_back(string_message::create(event_name));
+@@ -399,7 +562,7 @@ namespace sio
+         }
+ 
+     private:
+-        vector<message::ptr> m_vector;
++        std::vector<message::ptr> m_vector;
+     };
+ }
+ 
+diff --git a/src/sio_socket.cpp b/src/sio_socket.cpp
+index b48134e..299e0ad 100644
+--- a/src/sio_socket.cpp
++++ b/src/sio_socket.cpp
+@@ -228,8 +228,8 @@ namespace sio
+     
+     socket::impl::impl(client_impl *client,std::string const& nsp):
+         m_client(client),
+-        m_nsp(nsp),
+-        m_connected(false)
++        m_connected(false),
++        m_nsp(nsp)
+     {
+         NULL_GUARD(client);
+         if(m_client->opened())
+@@ -449,7 +449,7 @@ namespace sio
+         }
+     }
+     
+-    void socket::impl::ack(int msgId, const string &name, const message::list &ack_message)
++    void socket::impl::ack(int msgId, const string &, const message::list &ack_message)
+     {
+         packet p(m_nsp, ack_message.to_array_message(),msgId,true);
+         send_packet(p);
+diff --git a/src/sio_socket.h b/src/sio_socket.h
+index 53fa95a..69ef1f4 100644
+--- a/src/sio_socket.h
++++ b/src/sio_socket.h
+@@ -91,8 +91,8 @@ namespace sio
+         
+     private:
+         //disable copy constructor and assign operator.
+-        socket(socket const& sock){}
+-        void operator=(socket const& sock){}
++        socket(socket const&){}
++        void operator=(socket const&){}
+ 
+         class impl;
+         impl *m_impl;
+-- 
+2.27.0.windows.1
+
